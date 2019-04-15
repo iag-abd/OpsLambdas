@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+# aws ssm put-parameter --name "EcsTargetsForGroup" --value "a value" --type "String"
+Parameters:
+    SlackUrl:
+      Type:    'AWS::SSM::Parameter::Value<String>'
+      Default: SlackUrl
+      NoEcho: true
+    EcsGroupToAddToTargetGroups:
+      Type:    'AWS::SSM::Parameter::Value<String>'
+      Default: EcsGroupToAddToTargetGroups
+    EcsTargetsForGroup:
+      Type:    'AWS::SSM::Parameter::Value<String>'
+      Default: EcsTargetsForGroup
+
+Resources:
+  GenericSlacker:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: ruby2.5
+      Handler: function.lambda_handler
+      CodeUri: ./src/GenericSlacker/
+      Environment:
+        Variables:
+          SLACK_URL:  !Ref "SlackUrl"
+          ICON_EMOJI: ":panda_face:"
+          USERNAME:   hellraiser
+          CHANNEL:    macgyver_devnull
+      Events:
+        MyTopic:
+          Type: SNS
+          Properties:
+             Topic: !Ref GenericSlackSender
+             
+  SnsEcsStateChangeNotifier:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: ruby2.5
+      Handler: function.lambda_handler
+      CodeUri: ./src/SnsEcsStateChangeNotifier/
+      Environment:
+        Variables:
+          SLACK_URL:   !Ref SlackUrl
+          ICON_EMOJI:  ":panda_face:"
+          USERNAME:    hellraiser
+          CHANNEL:     macgyver_devnull
+          SLACK_TOPIC: !Ref GenericSlackSender
+      Events:
+        MyTopic:
+          Type: SNS
+          Properties:
+             Topic: !Ref SnsEcsStateChangeTopic
+             
+  SnsEcsTaskGroupAdder:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: ruby2.5
+      Handler: function.lambda_handler
+      CodeUri: ./src/SnsEcsTaskGroupAdder/
+      Environment:
+        Variables:
+          SLACK_TOPIC: !Ref GenericSlackSender
+      Events:
+        MyTopic:
+          Type: SNS
+          Properties:
+             Topic: !Ref SnsEcsTaskGroupAdderTopic
+             
+  GenericSlackSender:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: GenericSlackSender
+      TopicName: GenericSlackSender
+  
+  SnsEcsStateChangeTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: SnsEcsStateChangeTopic
+      TopicName: SnsEcsStateChangeTopic
+      
+  SnsEcsTaskGroupAdderTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: SnsEcsTaskGroupAdderTopic
+      TopicName: SnsEcsTaskGroupAdderTopic
+        
+  CloudWatchEventSnsEcsStateChanges:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: SnsEcsStateChange
+      Description: SnsEcsStateChange
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - ECS Task State Change
+        detail:
+          lastStatus:
+            - RUNNING
+            - PENDING
+            - STOPPED
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SnsEcsStateChangeTopic
+          Id: cw-notify-sns-ecs-change
+
+  CloudWatchEventAddToTargetGroup:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'SlackWatcher'
+      Description: 'Event rule to tigger things on Task Changes'
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - ECS Task State Change
+        detail:
+          lastStatus:
+            - RUNNING
+          desiredStatus:
+            - RUNNING
+          group:
+           - !Ref EcsGroupToAddToTargetGroups
+      State: ENABLED
+      Targets:
+        - Arn: !Ref SnsEcsTaskGroupAdderTopic
+          Id: any-container-change
+          InputTransformer:
+            InputPathsMap:
+              container: "$.detail.containers[0]"
+              clusterArn: "$.detail.clusterArn"
+              ip: "$.detail.containers[0].networkInterfaces[0].privateIpv4Address"
+              name: "$.detail.containers[0].name"
+              detail: "$.detail"
+              group: "$.detail.group"
+            InputTemplate: !Sub '"ip: <ip>, name: <name>, clusterArn: <clusterArn>, container: <container>, group: <group>, targets: [${EcsTargetsForGroup}]"'
+
+  # Alarm:
+  #   Type: AWS::CloudWatch::Alarm
+  #   Properties:
+  #     AlarmActions:
+  #       - !Ref AlarmTopic
+  #     ComparisonOperator: GreaterThanOrEqualToThreshold
+  #     Dimensions:
+  #       - Name: FunctionName
+  #         Value: !Ref CheckWebsitePeriodically
+  #     EvaluationPeriods: 1
+  #     MetricName: Errors
+  #     Namespace: AWS/Lambda
+  #     Period: 60
+  #     Statistic: Sum
+  #     Threshold: '1'
+
+# param
+# iam
+# sam lambda encrypted env
