@@ -1,0 +1,8 @@
+#!/bin/bash
+
+BUCKET=$1
+STACK=$2
+
+sam build
+sam package --s3-bucket ${BUCKET} --output-template-file packaged.yaml
+sam deploy --s3-bucket ${BUCKET} --template-file packaged.yaml  --stack-name ${STACK} --capabilities CAPABILITY_IAM 

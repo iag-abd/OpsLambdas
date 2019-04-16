@@ -1,0 +1,5 @@
+packaged.yaml
+vendor
+*.swp
+.aws-sam
+.bundle
